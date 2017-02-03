@@ -1,0 +1,54 @@
+---
+title: "Predicting DOTA match results"
+output: html_notebook
+---
+
+https://www.kaggle.com/devinanzelmo/d/devinanzelmo/dota-2-matches/setting-up-a-prediction-problem-dota-2
+
+
+# Background
+TODO: What is DOTA, how to play, Radiant vs Dire.
+
+# Goal
+The goal of this experiment is to find a model that could estimate the outcome of a DOTA 2 match based only on the participating players and their stats/history.
+
+# Data
+
+## Get
+Data was downloaded from https://www.kaggle.com/devinanzelmo/dota-2-matches
+TODO: how to download / where to extract
+
+## Explore
+```{r, message=FALSE}
+library(readr)
+library(data.table)
+match <- data.table(read_csv("data/match.csv"))
+```
+
+### Match features
+Match contains all the high level statistics of the match like the status of the towers at the end of the match and more importantly the outcome. Most if these variables should be dropped because most of them are not available before the matches.
+
+The few exceptions:
+
+**game_mode:**
+```{r}
+match[, .N, by=game_mode]
+```
+The two possible values for *game_mode* are the same from the aspect of game mechanics. Both (2-Captain Mode, 22-Ranked Matchmaking) are consists of a *banning phase* followed by *all pick* --> Feature will be removed. 
+
+**start_time:**
+It is irrelevant --> Will be removed.
+
+**radiant_win:**
+Indicates whether the *Radiant* or the *Dire* team won the match. It will be converted to a binary variable: 1-Radiant, 0-Dire win.
+
+**match_id:** should be kept to identify the match.
+
+Finalize match outcome df:
+```{r}
+match <- match[, list(match_id,radiant_win)]
+match[, radiant_win:=as.numeric(radiant_win == "True")]
+match_outcome <- match
+rm(match)
+```
+

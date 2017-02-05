@@ -23,9 +23,10 @@ TODO: how to download / where to extract
 library(readr)
 library(data.table)
 match <- data.table(read_csv("data/match.csv"))
+nrow(match)
 ```
 
-### Match features
+### match.csv variables
 Match contains all the high level statistics of the match like the status of the towers at the end of the match and more importantly the outcome. Most if these variables should be dropped because most of them are not available before the matches.
 
 The few exceptions:
@@ -52,3 +53,23 @@ match_outcome <- match
 rm(match)
 ```
 
+### player_rating.csv variables
+```{r, message=FALSE}
+player_ratings <- read_csv("data/player_ratings.csv")
+nrow(player_ratings)
+```
+
+# Exp1
+Average player winrate.
+
+```{r, message=FALSE}
+player_ratings$win_percent <- player_ratings$total_wins / player_ratings$total_matches
+# match_outcomes
+mo <- read_csv("data/match_outcomes.csv")
+mo$start_time <- NULL
+mo$parser_version <- NULL
+
+library(reshape2)
+x <- mo[1:1,]
+melt(data=x, id=c("match_id", "rad"))
+```

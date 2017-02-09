@@ -22,6 +22,9 @@ TODO: how to download / where to extract
 ```{r, message=FALSE}
 library(readr)
 library(data.table)
+library(reshape2)
+library(dplyr)
+
 match <- data.table(read_csv("data/match.csv"))
 nrow(match)
 ```
@@ -48,7 +51,8 @@ Indicates whether the *Radiant* or the *Dire* team won the match. It will be con
 Finalize match outcome df:
 ```{r}
 match <- match[, list(match_id,radiant_win)]
-match[, radiant_win:=as.numeric(radiant_win == "True")]
+match[, winner:= as.factor(if_else(radiant_win == "True", true = "RADIANT", false = "DIRE"))]
+match$radiant_win <- NULL
 match_outcome <- match
 rm(match)
 ```
@@ -63,13 +67,118 @@ nrow(player_ratings)
 Average player winrate.
 
 ```{r, message=FALSE}
-player_ratings$win_percent <- player_ratings$total_wins / player_ratings$total_matches
-# match_outcomes
-mo <- read_csv("data/match_outcomes.csv")
-mo$start_time <- NULL
-mo$parser_version <- NULL
-
-library(reshape2)
-x <- mo[1:1,]
-melt(data=x, id=c("match_id", "rad"))
+# Player ratings can be calculated from 900K historical matches
+player_ratings$win_percent_legacy <- player_ratings$total_wins / player_ratings$total_matches
 ```
+
+```{r, message=FALSE}
+players <- read_csv("data/players.csv")
+
+# Each row represents a player in a match thus 10 rows represents a match
+
+# Adding win_percent to players
+playerdata <- left_join(players, player_ratings[, c("account_id", "win_percent_legacy")],
+                        by=c("account_id" = "account_id"))
+# Imputing missing data: if there is no stat for the player, lets asume he is an average player (id 0 is for the average)
+playerdata[is.na(playerdata$win_percent_legacy), "win_percent_legacy"] <- player_ratings[player_ratings$account_id == 0, "win_percent_legacy"]
+
+# player_slot 0-4: radiant, 128-132: dire
+playerdata$side <- as.factor(if_else(playerdata$player_slot < 100, true = "RADIANT", false = "DIRE"))
+
+teamstat <- playerdata %>% group_by(match_id, side) %>% summarise(win_percent_legacy=mean(win_percent_legacy))
+teamstat <- left_join(teamstat[teamstat$side == "RADIANT", c("match_id", "win_percent_legacy")],
+                teamstat[teamstat$side == "DIRE", c("match_id", "win_percent_legacy")],
+                by="match_id", suffix=c("_RADIANT", "_DIRE")
+)
+
+matchdata <- left_join(match_outcome, teamstat, by="match_id")
+
+
+
+```
+
+
+```{r}
+# # match_outcomes : historical matches
+# mo <- read_csv("data/match_outcomes.csv")
+# mo$start_time <- NULL
+# mo$parser_version <- NULL
+# 
+# melted<- melt(data=mo, id=c("match_id", "rad"))
+# melted$variable <- as.character(melted$variable)
+# player_filter <- regexpr("account_id_[01234]+", melted$variable) == T
+# players_only <- melted[player_filter,]
+# win_only <- melted[!player_filter,]
+# players_only[, "variable"] <- "avg_win_ratio"
+# players_only <- left_join(players_only, player_ratings[, c("account_id", "win_percent")], by=c("value" = "account_id"))
+# 
+# # Calculate avg win percent per match per side
+# players_only <- players_only %>% group_by(match_id, rad, variable) %>% summarise(value=mean(win_percent))
+# players_only[players_only$rad == 0, "variable"] <- "avg_win_ratio_dire"
+# players_only[players_only$rad == 1, "variable"] <- "avg_win_ratio_radiant"
+# 
+# # Determine winner
+# win_only$value <- as.numeric(win_only$rad == 1 & win_only$value == 1)
+# win_only$variable <- "radiant_win"
+# win_only <- subset(win_only, rad == 1)
+# win_only$rad <- NULL
+# 
+# melted <- bind_rows(players_only, win_only)
+# melted$variable <- as.factor(melted$variable)
+# melted$rad <- NULL
+# 
+# dataset <- dcast(melted, match_id ~ variable, value.var = "value")
+# 
+# # Cleanup
+# rm(melted, players_only, win_only, player_filter)
+```
+
+Try to do the analysis
+
+```{r}
+set.seed(123)
+dataset <- matchdata
+
+train_indices <- sample(1:nrow(dataset), 0.9 * nrow(dataset))
+train <- dataset[train_indices,]
+test <- dataset[-train_indices,]
+
+library(h2o)
+localH2O = h2o.init(nthreads=-1)
+
+h_train <- as.h2o(train)
+h_test <- as.h2o(test)
+
+linear_model <- h2o.glm(x = c("win_percent_legacy_RADIANT", "win_percent_legacy_DIRE"), y = "winner",
+                  training_frame = h_train, validation_frame = h_test,
+                  family = "binomial",
+                  score_each_iteration = TRUE)
+
+h2o.auc(linear_model)
+plot(h2o.performance(linear_model, valid = TRUE))
+
+h2o.confusionMatrix(linear_model, h_test, thresholds = 0.5)
+
+random_forest <- h2o.randomForest(x = c("win_percent_legacy_RADIANT", "win_percent_legacy_DIRE"), y = "winner",
+                  training_frame = h_train, validation_frame = h_test,
+                  )
+
+h2o.auc(random_forest)
+plot(h2o.performance(random_forest, valid = TRUE))
+
+h2o.confusionMatrix(random_forest, h_test, thresholds = 0.5)
+
+```
+
+Ok. It is only a slight better than pure guessing.
+
+Actually the real game begins at character selection. A good combination of the heroas can lead to victory even for weaker players too.
+
+.
+.
+.
+.
+.
+.
+.
+.

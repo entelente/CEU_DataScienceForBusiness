@@ -34,7 +34,7 @@ Match contains all the high level statistics of the match like the status of the
 The few exceptions:
 
 **game_mode:**
-```{r}
+```{r, message=FALSE}
 match <- data.table(read_csv("data/match.csv"))
 nrow(match)
 match[, .N, by=game_mode]
@@ -82,89 +82,36 @@ legacy_player_ratings[, win_percent:=total_wins/total_matches]
 # Imputing missing data: if there is no stat for the player, lets asume he is an average player (id 0 is for the average)
 unidentified_win_percent <- legacy_player_ratings[account_id==0, win_percent]
 
-players <- data.table(read_csv("data/players.csv"))
-
 # Each row represents a player in a match thus 10 rows represents a match
+players_train <- data.table(read_csv("data/players.csv"))
+players_test <- data.table(read_csv("data/test_player.csv"))
 
-# Adding win_percent_legacy to players
-playerdata_train <- data.table(left_join(players, legacy_player_ratings[, c("account_id", "win_percent")],
-                        by=c("account_id" = "account_id")))
-playerdata_train[is.na(win_percent), win_percent:=unidentified_win_percent]
+feature1 <- function(legacy_player_ratings, players, outcome, imputed_win_percent) {
+  playerdata <- data.table(left_join(players, legacy_player_ratings[, c("account_id", "win_percent")],
+                          by=c("account_id" = "account_id")))
+  playerdata[is.na(win_percent), win_percent:=unidentified_win_percent]
+  
+  # player_slot 0-4: radiant, 128-132: dire
+  playerdata[, side:= as.factor(if_else(player_slot < 100, true = "RADIANT", false = "DIRE"))]
+  
+  teamstat <- playerdata%>% group_by(match_id, side) %>% summarise(win_percent_legacy=mean(win_percent))
+  teamstat <- left_join(teamstat[teamstat$side == "RADIANT", c("match_id", "win_percent_legacy")],
+                  teamstat[teamstat$side == "DIRE", c("match_id", "win_percent_legacy")],
+                  by="match_id", suffix=c("_RADIANT", "_DIRE"))
+  out <- left_join(outcome, teamstat, by="match_id")
+  
+  return(out)
+}
 
-# player_slot 0-4: radiant, 128-132: dire
-playerdata_train[, side:= as.factor(if_else(player_slot < 100, true = "RADIANT", false = "DIRE"))]
+train <- feature1(legacy_player_ratings, players_train, ranked_match_outcome_train, unidentified_win_percent)
+test <- feature1(legacy_player_ratings, players_test, ranked_match_outcome_test, unidentified_win_percent)
 
-teamstat_train <- playerdata_train%>% group_by(match_id, side) %>% summarise(win_percent_legacy=mean(win_percent))
-teamstat_train <- left_join(teamstat_train[teamstat_train$side == "RADIANT", c("match_id", "win_percent_legacy")],
-                teamstat_train[teamstat_train$side == "DIRE", c("match_id", "win_percent_legacy")],
-                by="match_id", suffix=c("_RADIANT", "_DIRE"))
-
-# Test data: lets do the same
-players <- data.table(read_csv("data/test_player.csv"))
-playerdata_test <- data.table(left_join(players, legacy_player_ratings[, c("account_id", "win_percent")],
-                       by=c("account_id" = "account_id")))
-playerdata_test[is.na(win_percent), win_percent:=unidentified_win_percent]
-playerdata_test[, side:= as.factor(if_else(player_slot < 100, true = "RADIANT", false = "DIRE"))]
-
-teamstat_test <- playerdata_test%>% group_by(match_id, side) %>% summarise(win_percent_legacy=mean(win_percent))
-teamstat_test <- left_join(teamstat_test[teamstat_test$side == "RADIANT", c("match_id", "win_percent_legacy")],
-                teamstat_test[teamstat_test$side == "DIRE", c("match_id", "win_percent_legacy")],
-                by="match_id", suffix=c("_RADIANT", "_DIRE"))
-
-
-train <- left_join(ranked_match_outcome_train, teamstat_train, by="match_id")
-test <- left_join(ranked_match_outcome_test, teamstat_test, by="match_id")
-
-# rm(playerdata, teamstat, train, test)
-
-rm(players)
 ```
 
-
-```{r}
-# # match_outcomes : historical matches
-# mo <- read_csv("data/match_outcomes.csv")
-# mo$start_time <- NULL
-# mo$parser_version <- NULL
-# 
-# melted<- melt(data=mo, id=c("match_id", "rad"))
-# melted$variable <- as.character(melted$variable)
-# player_filter <- regexpr("account_id_[01234]+", melted$variable) == T
-# players_only <- melted[player_filter,]
-# win_only <- melted[!player_filter,]
-# players_only[, "variable"] <- "avg_win_ratio"
-# players_only <- left_join(players_only, player_ratings[, c("account_id", "win_percent")], by=c("value" = "account_id"))
-# 
-# # Calculate avg win percent per match per side
-# players_only <- players_only %>% group_by(match_id, rad, variable) %>% summarise(value=mean(win_percent))
-# players_only[players_only$rad == 0, "variable"] <- "avg_win_ratio_dire"
-# players_only[players_only$rad == 1, "variable"] <- "avg_win_ratio_radiant"
-# 
-# # Determine winner
-# win_only$value <- as.numeric(win_only$rad == 1 & win_only$value == 1)
-# win_only$variable <- "radiant_win"
-# win_only <- subset(win_only, rad == 1)
-# win_only$rad <- NULL
-# 
-# melted <- bind_rows(players_only, win_only)
-# melted$variable <- as.factor(melted$variable)
-# melted$rad <- NULL
-# 
-# dataset <- dcast(melted, match_id ~ variable, value.var = "value")
-# 
-# # Cleanup
-# rm(melted, players_only, win_only, player_filter)
-```
 
 Try to do the analysis
 
 ```{r, message=FALSE}
-set.seed(123)
-
-train_indices <- sample(1:nrow(dataset), 0.9 * nrow(dataset))
-train <- matchdata[train_indices,]
-test <- matchdata[-train_indices,]
-
 upload_data <- function(up_train, up_test) {
   if(exists("h_train")) {
     h2o.rm(h_train)

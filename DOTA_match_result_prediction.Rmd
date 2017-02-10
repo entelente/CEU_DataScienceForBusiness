@@ -25,6 +25,8 @@ library(data.table)
 library(reshape2)
 library(dplyr)
 library(h2o)
+library(ggplot2)
+
 localH2O = h2o.init(nthreads=-1)
 ```
 
@@ -130,7 +132,21 @@ linear_model <- h2o.glm(x = c("win_percent_legacy_RADIANT", "win_percent_legacy_
                   family = "binomial",
                   score_each_iteration = TRUE)
 
-h2o.auc(linear_model)
+model_performance <- function(model) {
+  auc <- h2o.auc(model, valid = TRUE)
+  fpr <- h2o.fpr( h2o.performance(model, valid = TRUE) )[['fpr']]
+  tpr <- h2o.tpr( h2o.performance(model, valid = TRUE) )[['tpr']]
+  ggplot( data.table(fpr = fpr, tpr = tpr), aes(fpr, tpr) ) + 
+    # geom_area(fill="#FCEBED") +
+    geom_line(colour="red", size = 1) +
+    geom_abline(linetype="dashed") +
+    theme_bw() +
+    ggtitle( sprintf('AUC: %f', auc) )
+}
+
+model_performance(linear_model)
+
+h2o.auc(linear_model, valid = TRUE)
 plot(h2o.performance(linear_model, valid = TRUE))
 
 h2o.confusionMatrix(linear_model, newdata = h_test)

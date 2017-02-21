@@ -146,62 +146,101 @@ model_performance <- function(model) {
 
 model_performance(linear_model)
 
-h2o.auc(linear_model, valid = TRUE)
-plot(h2o.performance(linear_model, valid = TRUE))
-
 h2o.confusionMatrix(linear_model, newdata = h_test)
 ```
 
 Ok. It is only a slight better than pure guessing.
 From my own playing experience I know that in this game playing more matches are very important. Adding this kind of information as a feature may have a positive effect on the guessing.
 
+TODO: Distribution of match counts
+
 ```{r}
 # In player ratings for account 0 (all of unidentified accounts) the number of matches are not for one player but all of the unidentified players. Also there are missing values. This will be corrected to use an average.
+avg_legacy_match_count <- as.integer(round(mean(as.numeric(legacy_player_ratings[legacy_player_ratings$account_id != 0, "total_matches"]$total_matches))))
+legacy_player_ratings[legacy_player_ratings$account_id == 0 | is.na(legacy_player_ratings$account_id), "total_matches"] <- avg_legacy_match_count
 
-avg_legacy_match_count <- as.integer(round(mean(as.numeric(player_ratings[player_ratings$account_id != 0, "total_matches"]$total_matches))))
-player_ratings[player_ratings$account_id == 0 | is.na(player_ratings$account_id), "total_matches"] <- avg_legacy_match_count
+feature2 <- function(legacy_player_ratings, players, feature1, avg_legacy_match_count) {
+  playerdata <- data.table(left_join(players_train, legacy_player_ratings[,.(account_id, total_matches)], by = "account_id"))
+  playerdata[is.na(total_matches), total_matches:=avg_legacy_match_count]
+  
+  # player_slot 0-4: radiant, 128-132: dire
+  playerdata[, side:= as.factor(if_else(player_slot < 100, true = "RADIANT", false = "DIRE"))]
+  
+  teamstat <- playerdata %>% group_by(match_id, side) %>% summarise(ln_avg_matches_legacy=log(mean(total_matches)), ln_total_matches_legacy=log(sum(total_matches)))
+  
+  teamstat_join_columns <- c("match_id", "ln_avg_matches_legacy", "ln_total_matches_legacy")
+  teamstat <- left_join(teamstat[teamstat$side == "RADIANT", teamstat_join_columns],
+                  teamstat[teamstat$side == "DIRE", teamstat_join_columns],
+                  by="match_id", suffix=c("_RADIANT", "_DIRE")
+              )
+  out <- left_join(feature1, teamstat, by="match_id")
+  
+  return(out)
+}
 
-playerdata <- data.table(left_join(playerdata, player_ratings[,.(account_id, total_matches)], by = "account_id"))
-playerdata[is.na(total_matches), total_matches:=avg_legacy_match_count]
+train <- feature2(legacy_player_ratings, players_train, train, avg_legacy_match_count)
+test <- feature2(legacy_player_ratings, players_test, test, avg_legacy_match_count)
 
-teamstat <- playerdata %>% group_by(match_id, side) %>% summarise(win_percent_legacy=mean(win_percent_legacy), avg_matches_legacy=mean(total_matches), total_matches_legacy=sum(total_matches))
-
-teamstat_join_columns <- c("match_id", "win_percent_legacy", "avg_matches_legacy", "total_matches_legacy")
-teamstat <- left_join(teamstat[teamstat$side == "RADIANT", teamstat_join_columns],
-                teamstat[teamstat$side == "DIRE", teamstat_join_columns],
-                by="match_id", suffix=c("_RADIANT", "_DIRE")
-)
-
-matchdata <- left_join(match_outcome, teamstat, by="match_id")
-
-
-set.seed(123)
-
-train_indices <- sample(1:nrow(dataset), 0.9 * nrow(dataset))
-train <- matchdata[train_indices,]
-test <- matchdata[-train_indices,]
 
 upload_data(train, test)
 
 linear_model <- h2o.glm(x = c(
   "win_percent_legacy_RADIANT",
   "win_percent_legacy_DIRE",
-  "avg_matches_legacy_RADIANT",
-  "avg_matches_legacy_DIRE",
-  "total_matches_legacy_RADIANT",
-  "total_matches_legacy_DIRE"),
+  "ln_avg_matches_legacy_RADIANT",
+  "ln_avg_matches_legacy_DIRE",
+  "ln_total_matches_legacy_RADIANT",
+  "ln_total_matches_legacy_DIRE"),
   y = "winner",
   training_frame = h_train, validation_frame = h_test,
   family = "binomial",
   score_each_iteration = TRUE)
 
-h2o.auc(linear_model)
-plot(h2o.performance(linear_model, valid = TRUE))
+model_performance(linear_model)
 
 h2o.confusionMatrix(linear_model, newdata = h_test)
+
 ```
 
-There is a slight improvement in the prediction accuracy. The conjecture was right.
+Unfortunatelly the prediction accuracy didn't increase.
+
+Actually the real game begins at character selection. A good combination of the heroes can lead to victory even for weaker players too. All the heroes will be added as a binary indicator variable. (Hero ids: [1, 113])
+
+
+```{r, message=FALSE}
+
+feature3 <- function(players, feature2) {
+  herodata <- players[, list(match_id, player_slot, hero_id)]
+  melted <- melt(herodata, id.vars = c("match_id", "player_slot"))
+  melted[, variable:=as.factor(paste(ifelse(player_slot < 100, "RADIANT", "DIRE"), "hero", value, sep = "_"))]
+  melted[, value:=1]
+  herodata <- dcast(melted, match_id ~ variable)
+
+  out <- left_join(feature2, herodata, by="match_id")
+  
+  return(out)
+}
+
+train <- feature3(players_train, train)
+test <- feature3(players_test, test)
+
+upload_data(train, test)
+
+
+random_forest <- h2o.randomForest(
+  x = colnames(train)[3:length(colnames(train))],
+  y = "winner",
+  training_frame = h_train, validation_frame = h_test
+  #score_each_iteration = TRUE
+  )
+
+model_performance(linear_model)
+
+h2o.confusionMatrix(linear_model, newdata = h_test)
+
+```
+
+
 
 Kill death ratio is also a very important statistics that shows the players skill. It can be calculated from the ranked match data. Of course it is not enough alone to determine player skill because some characters simply just better at doing the killing blow. Avg xp per minute and avg gold per minute also important.
 
@@ -212,14 +251,6 @@ player_stat_rated <- playerdata %>% group_by(account_id) %>% summarise(kdr=sum(k
 
 
 
-
-Actually the real game begins at character selection. A good combination of the heroes can lead to victory even for weaker players too. All the heroes will be added as a binary indicator variable.
-
-```{r, message=FALSE}
-hero_names <- data.table(read_csv("data/hero_names.csv"))
-
-```
-.
 .
 .
 .

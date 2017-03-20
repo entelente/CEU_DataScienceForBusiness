@@ -1,13 +1,17 @@
 ---
 title: "Predicting DOTA match results"
+author: "Janos Strasszer"
+date: "March 20, 2017"
 output:
-  html_document: default
+  md_document: default
   html_notebook: default
+  html_document: default
 ---
 
 ```{r, echo=FALSE}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE)
 ```
+
 
 # Background
 DOTA or more specifically DOTA 2 is an online MOBA (Massive online battle arena) game developed and hosted by Valve Corporation. Dota 2 has a widespread and active competitive scene, with teams from across the world playing professionally in various dedicated leagues and tournaments. Premium Dota 2 tournaments often have prize pools totaling millions of US dollars, the highest of any eSport.  
@@ -17,15 +21,13 @@ In DOTA there are two opposing teams called Radiant and Dire trying to destroy t
 # Goal
 The goal of this experiment is to find a model that could estimate the outcome of a DOTA 2 match based only on the participating players and their stats/history and on the information that is available only at the beginning of the matches.
 
-# Data
-
-## Get
+## Getting data
 Data was downloaded from https://www.kaggle.com/devinanzelmo/dota-2-matches
 The downloaded [data](https://www.kaggle.com/devinanzelmo/dota-2-matches/downloads/dota-2-matches.zip) has to be extracted to a *data* folder in the working directory.
 
 The data consists multiple files but only some of them were used. Please find detailed description below.
 
-## Explore
+## Exploring data
 ```{r}
 library(readr)
 library(data.table)

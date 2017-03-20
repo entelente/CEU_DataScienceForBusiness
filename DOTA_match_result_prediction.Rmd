@@ -1,33 +1,39 @@
 ---
 title: "Predicting DOTA match results"
 output:
-  html_notebook: default
   html_document: default
+  html_notebook: default
 ---
 
-https://www.kaggle.com/devinanzelmo/d/devinanzelmo/dota-2-matches/setting-up-a-prediction-problem-dota-2
-
+```{r, echo=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
 
 # Background
-TODO: What is DOTA, how to play, Radiant vs Dire.
+DOTA or more specifically DOTA 2 is an online MOBA (Massive online battle arena) game developed and hosted by Valve Corporation. Dota 2 has a widespread and active competitive scene, with teams from across the world playing professionally in various dedicated leagues and tournaments. Premium Dota 2 tournaments often have prize pools totaling millions of US dollars, the highest of any eSport.  
+
+In DOTA there are two opposing teams called Radiant and Dire trying to destroy the opposing team's base. During the game the players collecting experience points to level up and gain additional skills and also gold to buy equipment. Additional details can be found here: [Wikipedia](https://en.wikipedia.org/wiki/Dota_2), [DOTA 2 Wiki](http://dota2.gamepedia.com/Dota_2_Wiki)
 
 # Goal
-The goal of this experiment is to find a model that could estimate the outcome of a DOTA 2 match based only on the participating players and their stats/history.
+The goal of this experiment is to find a model that could estimate the outcome of a DOTA 2 match based only on the participating players and their stats/history and on the information that is available only at the beginning of the matches.
 
 # Data
 
 ## Get
 Data was downloaded from https://www.kaggle.com/devinanzelmo/dota-2-matches
-TODO: how to download / where to extract
+The downloaded [data](https://www.kaggle.com/devinanzelmo/dota-2-matches/downloads/dota-2-matches.zip) has to be extracted to a *data* folder in the working directory.
+
+The data consists multiple files but only some of them were used. Please find detailed description below.
 
 ## Explore
-```{r, message=T}
+```{r}
 library(readr)
 library(data.table)
 library(reshape2)
 library(dplyr)
 library(h2o)
 library(ggplot2)
+library(gridExtra)
 
 localH2O = h2o.init(nthreads=-1)
 ```
@@ -38,7 +44,7 @@ Match contains all the high level statistics of the match like the status of the
 The few exceptions:
 
 **game_mode:**
-```{r, message=FALSE}
+```{r}
 match <- data.table(read_csv("data/match.csv"))
 nrow(match)
 match[, .N, by=game_mode]
@@ -54,7 +60,7 @@ Indicates whether the *Radiant* or the *Dire* team won the match. It will be con
 **match_id:** should be kept to identify the match.
 
 Finalize match outcome df:
-```{r, message=FALSE}
+```{r}
 # Training outcome
 match <- match[, list(match_id,radiant_win)]
 match[, winner:= as.factor(if_else(radiant_win == "True", true = "RADIANT", false = "DIRE"))]
@@ -68,21 +74,31 @@ ranked_match_outcome_test[, winner:=as.factor(if_else(radiant_win == 1, true = "
 ranked_match_outcome_test$radiant_win <- NULL
 ```
 
+**test_labels.csv** has a similar structure but only contains the outcome of the matches. It is ideal to be used as validation data.
+
 ### player_rating.csv variables
-```{r, message=FALSE}
+```{r}
 legacy_player_ratings <- data.table(read_csv("data/player_ratings.csv"))
 nrow(legacy_player_ratings)
 ```
+**total_wins:** The total number of wins the player has.
 
-# Exp1
-Average player winrate.
+**total_matches:** The total number of matches the player played.
 
-```{r, message=FALSE}
+### players.csv
+Contains player information for the matches: What player played what hero in what slot. Also there are a tons of performance indicators that won't be listed here but later during the experiments. For more information please check the data description on Kaggle. 
+
+test_player.csv has similar information but without the performance indicators thus it is ideal to be used as validation data.
+
+# Experiment 1
+In the first experiment only the average player winrate per team will be used as feature in the prediction.
+
+```{r}
 # Player ratings can be calculated from 900K historical matches
 legacy_player_ratings[, win_percent:=total_wins/total_matches]
 ```
 
-```{r, message=FALSE}
+```{r}
 # Imputing missing data: if there is no stat for the player, lets asume he is an average player (id 0 is for the average)
 unidentified_win_percent <- legacy_player_ratings[account_id==0, win_percent]
 
@@ -108,7 +124,7 @@ feature1 <- function(legacy_player_ratings, players, outcome, imputed_win_percen
 }
 ```
 
-```{r, message=FALSE, results="hide"}
+```{r, results="hide"}
 train <- feature1(legacy_player_ratings, players_train, ranked_match_outcome_train, unidentified_win_percent)
 test <- feature1(legacy_player_ratings, players_test, ranked_match_outcome_test, unidentified_win_percent)
 
@@ -117,7 +133,7 @@ test <- feature1(legacy_player_ratings, players_test, ranked_match_outcome_test,
 
 Try to do the analysis
 
-```{r, message=FALSE}
+```{r, results="hide"}
 upload_data <- function(up_train, up_test) {
   if(exists("h_train")) {
     h2o.rm(h_train)
@@ -147,7 +163,9 @@ model_performance <- function(model) {
     theme_bw() +
     ggtitle( sprintf('AUC: %f', auc) )
 }
+```
 
+```{r}
 model_performance(linear_model)
 
 h2o.confusionMatrix(linear_model, newdata = h_test)
@@ -156,14 +174,23 @@ h2o.confusionMatrix(linear_model, newdata = h_test)
 Ok. It is only a slight better than pure guessing.
 From my own playing experience I know that in this game playing more matches are very important. Adding this kind of information as a feature may have a positive effect on the guessing.
 
-# Exp2
-TODO: Distribution of match counts
+# Experiment 2
+In the second experiment the number of total matches the players played will be added as feature alongside with the averages too.
 
 ```{r}
 # In player ratings for account 0 (all of unidentified accounts) the number of matches are not for one player but all of the unidentified players. Also there are missing values. This will be corrected to use an average.
 avg_legacy_match_count <- as.integer(round(mean(as.numeric(legacy_player_ratings[legacy_player_ratings$account_id != 0, "total_matches"]$total_matches))))
 legacy_player_ratings[legacy_player_ratings$account_id == 0 | is.na(legacy_player_ratings$account_id), "total_matches"] <- avg_legacy_match_count
 
+# Distribution of value:
+p1 <- ggplot(data = legacy_player_ratings) + geom_histogram(aes(x = total_matches))
+p2 <- ggplot(data = legacy_player_ratings) + geom_histogram(aes(x = log(total_matches)))
+
+grid.arrange(p1, p2, ncol=2, top = "Distribution of total_matches")
+```
+According to the histograms taking logs is a good idea in this case. The distribution is still far from Gaussian but looks more usable.
+
+```{r}
 feature2 <- function(legacy_player_ratings, players, feature1, avg_legacy_match_count) {
   playerdata <- data.table(left_join(players_train, legacy_player_ratings[,.(account_id, total_matches)], by = "account_id"))
   playerdata[is.na(total_matches), total_matches:=avg_legacy_match_count]
@@ -182,7 +209,9 @@ feature2 <- function(legacy_player_ratings, players, feature1, avg_legacy_match_
   
   return(out)
 }
+```
 
+```{r, results="hide"}
 train <- feature2(legacy_player_ratings, players_train, train, avg_legacy_match_count)
 test <- feature2(legacy_player_ratings, players_test, test, avg_legacy_match_count)
 
@@ -200,19 +229,20 @@ linear_model <- h2o.glm(x = c(
   training_frame = h_train, validation_frame = h_test,
   family = "binomial",
   score_each_iteration = TRUE)
+```
 
+```{r}
 model_performance(linear_model)
 
 h2o.confusionMatrix(linear_model, newdata = h_test)
-
 ```
 
-Unfortunatelly the prediction accuracy didn't increase. We have to find new ways to improve the accuracy.
+Unfortunately the prediction accuracy didn't increase. We have to find new ways to improve the accuracy.
 
-# Exp3
+# Experiment 3
 Actually the real game begins at character selection. A good combination of the heroes can lead to victory even for weaker players too. All the heroes will be added as a binary indicator variable. (Hero ids: [1, 113])
 
-As the linear model starting to become more complicated a random forest model will be evaluated too.
+As the linear model starting to become more complicated a random forest model will be evaluated too. Random forest can provide a good output with minimal effort and it is resilient to over-fitting.
 
 
 ```{r, message=FALSE}
@@ -228,7 +258,9 @@ feature3 <- function(players, feature2) {
   
   return(out)
 }
+```
 
+```{r, results="hide"}
 train <- feature3(players_train, train)
 test <- feature3(players_test, test)
 
@@ -240,34 +272,40 @@ linear_model <- h2o.glm(
   training_frame = h_train, validation_frame = h_test,
   family = "binomial",
   score_each_iteration = TRUE)
+```
 
+```{r}
 model_performance(linear_model)
 
 h2o.confusionMatrix(linear_model, newdata = h_test)
+```
 
+```{r, results="hide"}
 random_forest <- h2o.randomForest(
   x = colnames(train)[3:length(colnames(train))],
   y = "winner",
   training_frame = h_train, validation_frame = h_test
   # score_each_iteration = TRUE
   )
+```
 
+```{r}
 model_performance(random_forest)
 
 h2o.confusionMatrix(random_forest, newdata = h_test)
 
 ```
 
-The theory was confirmed: Adding information of hero selection increased the AUX about 11 percantage points for linear model. Random forest didn't performed that well as the linear model but using the new features it was still better than the linear model previously.
+The theory was confirmed: Adding information of hero selection increased the AUX about 11 percentage points for linear model. Random forest didn't performed that well as the linear model but using the new features it was still better than the linear model previously.
 
 
-# Exp4
+# Experiment 4
 
-The following player stats will be calculated from ranked match data to have a detailed information regardint the invidual player skill:
+The following player stats will be calculated from ranked match data to have a detailed information regarding the individual player skill:
 
-* Kill death ratio (kdr) : An important statistics that shows the players skill. Unfortunately only killing blows count as kills therefore this ratio will be adjusted by counting assists (when the player participated in the kill but an other palyer got the actual kill)
+* Kill death ratio (kdr) : An important statistics that shows the players skill. Unfortunately only killing blows count as kills therefore this ratio will be adjusted by counting assists (when the player participated in the kill but an other player got the actual kill)
 
-* Average XP/min : Higher value means that the player participated in fights more actively and by acquiring more experience points he could level up faster. Level adavantage is a decision maker between win/lose.
+* Average XP/min : Higher value means that the player participated in fights more actively and by acquiring more experience points he could level up faster. Level advantage is a decision maker between win/lose.
 
 * Average Gold/min : Higher value means that the player was able to have more lat hits (That earns golds) or was able to destroy enemy structures. With more gold the player could buy more advanced items and this is improving his team's chance to win.
 
@@ -277,6 +315,29 @@ These player performance indicators will be assigned to the corresponding player
 player_stat_rated <- players_train %>% group_by(account_id) %>%
   summarise(kdr=(sum(kills)+sum(assists))/sum(deaths), avg_xp_per_min=mean(xp_per_min), avg_gold_per_min=mean(gold_per_min))
 
+# Distribution of values:
+distplot <- function(dat, label_prefix) {
+  p1 <- ggplot(data = dat) + geom_histogram(aes(x = kdr)) + xlab(paste(label_prefix, "kdr", sep = ""))
+  p2 <- ggplot(data = dat) + geom_histogram(aes(x = avg_xp_per_min)) + xlab(paste(label_prefix, "avg_xp_per_min", sep = ""))
+  p3 <- ggplot(data = dat) + geom_histogram(aes(x = avg_gold_per_min)) + xlab(paste(label_prefix, "avg_gold_per_min", sep = ""))
+
+  grid.arrange(p1, p2, p3, ncol = 3, top = "Distribution of values")
+}
+
+distplot(player_stat_rated, "")
+```
+Kdr and avg_gold_per_min shows a right tail and also we are going for differences here rather than levels thus taking logs should be beneficial.
+
+```{r}
+player_stat_rated$kdr <- log(player_stat_rated$kdr)
+player_stat_rated$avg_xp_per_min <- log(player_stat_rated$avg_xp_per_min)
+player_stat_rated$avg_gold_per_min <- log(player_stat_rated$avg_gold_per_min)
+
+distplot(player_stat_rated, "log ")
+```
+
+
+```{r}
 feature4 <- function(players, feature3) {
   herodata <- players[, list(match_id, player_slot, account_id)]
   melted <- melt(herodata, id.vars = c("match_id", "player_slot"))
@@ -291,21 +352,79 @@ feature4 <- function(players, feature3) {
   melted$value <- melted$avg_gold_per_min
   herodata3 <- dcast(melted, match_id ~ variable)
   
-  out <- left_join(herodata1, herodata2, by="match_id")
-  out <- left_join(out, herodata3, by="match_id")
-  
+  herodata <- left_join(herodata1, herodata2, by="match_id")
+  herodata <- left_join(herodata, herodata3, by="match_id")
+ 
+  out <- left_join(feature3, herodata, by="match_id")
+   
   return(out)
 }
-
-gkdjkhkgjhf
 ```
 
+```{r, results="hide"}
+train_2 <- feature4(players_train, train)
+test_2 <- feature4(players_test, test)
+
+upload_data(train_2, test_2)
+
+linear_model <- h2o.glm(
+  x = colnames(train_2)[3:length(colnames(train_2))],
+  y = "winner",
+  training_frame = h_train, validation_frame = h_test,
+  family = "binomial",
+  score_each_iteration = TRUE)
+```
+
+```{r}
+model_performance(linear_model)
+
+h2o.confusionMatrix(linear_model, newdata = h_test)
+```
+
+```{r, results="hide"}
+gb_model <- h2o.gbm(
+  x = colnames(train)[3:length(colnames(train))],
+  y = "winner",
+  training_frame = h_train, validation_frame = h_test,
+  score_each_iteration = TRUE)
+```
+
+```{r}
+model_performance(gb_model)
+
+h2o.confusionMatrix(gb_model, newdata = h_test)
+```
+
+The AUC became worse by adding these features. It looks like the model is starting to became more complicated and it is starting to overfit.
+**The previous feature set will be used for final evaluation. (Experiment 3)**
+
+# Conclusion
+
+Several different model with different parameters (GBM, Random Forest, Neural Network) have been tested using the H_2_O Flow UI but neither of them provided the accuracy of the linear model used in *Experiment 3*:
+**Experiment 3** results:
+
+```{r, results="hide"}
+upload_data(train, test)
 
 
-.
-.
-.
-.
-.
-.
-.
+linear_model <- h2o.glm(
+  x = colnames(train)[3:length(colnames(train))],
+  y = "winner",
+  training_frame = h_train, validation_frame = h_test,
+  family = "binomial",
+  score_each_iteration = TRUE)
+```
+
+```{r}
+model_performance(linear_model)
+
+h2o.confusionMatrix(linear_model, newdata = h_test)
+```
+
+The final accuracy is 63% what is much better than random guessing and it is a pretty good result considering the fact that the matches organized by a ranking system that tryes to assign teams with similar skill levels to a match.
+
+#### Appendix: List of variables used in Experiment 3
+```{r}
+colnames(train)
+```
+
